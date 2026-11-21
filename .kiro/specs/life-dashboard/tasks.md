@@ -9,5 +9,7 @@
 - [x] 7. Tasks: tambah, toggle, edit in-place, hapus dengan undo toast
 - [x] 8. Tasks: duplikat ditolak case-insensitive, sort tersimpan, hitungan aktual
 - [x] 9. Links: tambah dengan normalisasi URL, validasi skema, hapus dengan undo
-- [x] 10. localStorage: try/catch semua baca-tulis, deteksi corrupt per kunci, banner error
+- [x] 10. localStorage: try/catch semua baca-tulis, deteksi corrupt per kunci, validasi shape tiap field, banner error
 - [x] 11. Cross-tab sync via storage event
+- [x] 12. Fokus keyboard: toggle task mengembalikan fokus ke checkbox yang sama
+- [x] 13. Animasi timer selesai: bar sweep 320ms benar-benar terlihat

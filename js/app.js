@@ -88,6 +88,34 @@
     tryWrite(KEY_TIMER, state.timer);
   }
 
+  /* ── Field validators (Bug B fix) ── */
+  /* Validate each item's shape so a hand-edited or corrupt value cannot
+     cause a runtime error later (e.g. null.trim() crashing renderGreeting). */
+  function isValidTask(t) {
+    return t !== null && typeof t === 'object'
+      && typeof t.id        === 'string'
+      && typeof t.title     === 'string'
+      && typeof t.done      === 'boolean'
+      && typeof t.createdAt === 'number';
+  }
+
+  function isValidLink(l) {
+    return l !== null && typeof l === 'object'
+      && typeof l.id    === 'string'
+      && typeof l.label === 'string'
+      && typeof l.url   === 'string';
+  }
+
+  function isValidSettings(s) {
+    if (s === null || typeof s !== 'object') return false;
+    if (typeof s.name !== 'string') return false;
+    if (typeof s.durationMs !== 'number'
+        || s.durationMs < 60000
+        || s.durationMs > 7200000) return false;
+    if (!['created', 'alpha', 'open'].includes(s.sort)) return false;
+    return true;
+  }
+
   /* ── Load state ── */
   function loadState() {
     storageAvailable = checkStorage();
@@ -101,12 +129,14 @@
 
     const rTasks = tryReadRaw(KEY_TASKS);
     if (!rTasks.found) {
-      /* key absent, use default */
+      /* key absent, keep default */
     } else if (rTasks.corrupt || !Array.isArray(rTasks.value)) {
       dataCorrupt = true;
       tryWrite(KEY_TASKS, []);
     } else {
-      state.tasks = rTasks.value;
+      /* Filter out any item whose shape is wrong */
+      state.tasks = rTasks.value.filter(isValidTask);
+      if (state.tasks.length !== rTasks.value.length) dataCorrupt = true;
     }
 
     const rLinks = tryReadRaw(KEY_LINKS);
@@ -116,7 +146,8 @@
       dataCorrupt = true;
       tryWrite(KEY_LINKS, []);
     } else {
-      state.links = rLinks.value;
+      state.links = rLinks.value.filter(isValidLink);
+      if (state.links.length !== rLinks.value.length) dataCorrupt = true;
     }
 
     const rSettings = tryReadRaw(KEY_SETTINGS);
@@ -126,7 +157,14 @@
       dataCorrupt = true;
       tryWrite(KEY_SETTINGS, DEFAULT_SETTINGS);
     } else {
-      state.settings = Object.assign({}, DEFAULT_SETTINGS, rSettings.value);
+      /* Merge with defaults first, then validate the merged result */
+      const merged = Object.assign({}, DEFAULT_SETTINGS, rSettings.value);
+      if (isValidSettings(merged)) {
+        state.settings = merged;
+      } else {
+        dataCorrupt = true;
+        tryWrite(KEY_SETTINGS, DEFAULT_SETTINGS);
+      }
     }
 
     const rTimer = tryReadRaw(KEY_TIMER);
@@ -284,8 +322,13 @@
       persistTimer();
       stopTick();
 
-      /* Bug #6 fix: reset bar to 0 first, then animate to 1 so the
-         320ms transition is actually visible. */
+      /* Bug #6 fix: call renderTimer first (status=done, bar stays at ~1),
+         then in the next frame reset to 0 and animate to 1 so the full
+         320ms sweep is visible. Without this, renderTimer runs after the
+         rAF is queued and immediately sets scaleX(1), leaving nothing to
+         animate when the rAF fires. */
+      renderTimer();
+
       const barEl = document.getElementById('timer-bar');
       barEl.classList.remove('completing');
       barEl.style.transform = 'scaleX(0)';
@@ -295,7 +338,6 @@
         barEl.style.transform = 'scaleX(1)';
       });
 
-      renderTimer();
       return;
     }
 
@@ -426,6 +468,10 @@
     task.done = !task.done;
     persistAll();
     renderTasks();
+    /* Bug A fix: renderTasks rebuilds the whole list, losing focus.
+       Put it back on the checkbox that was just toggled. */
+    const chk = document.getElementById('chk-' + id);
+    if (chk) chk.focus();
   }
 
   function startEditTask(id) {

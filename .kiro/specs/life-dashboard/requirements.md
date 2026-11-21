@@ -120,5 +120,16 @@ THE SYSTEM SHALL show a banner and continue operating in memory
 WHEN a localStorage key contains corrupt JSON
 THE SYSTEM SHALL discard that key, use the default value, and show "Data lama tidak terbaca dan sudah dihapus."
 
+WHEN a localStorage key contains valid JSON but a field has the wrong type (e.g. name is null, durationMs is a string)
+THE SYSTEM SHALL discard that key, use the default value, and show the data corrupt banner
+
+WHEN tasks or links contain items with missing or wrong-typed fields
+THE SYSTEM SHALL filter out only the invalid items and keep the valid ones
+
 WHEN a write to localStorage fails
 THE SYSTEM SHALL keep the in-memory state intact and show a storage unavailable banner
+
+## Keyboard
+
+WHEN the user toggles a task checkbox using Space
+THE SYSTEM SHALL return focus to that same checkbox after re-rendering the list
