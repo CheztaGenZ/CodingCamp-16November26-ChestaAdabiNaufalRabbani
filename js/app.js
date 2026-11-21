@@ -27,13 +27,21 @@
   /* ── Storage helpers ── */
   let storageAvailable = true;
 
-  function tryRead(key, fallback) {
+  /* Bug #3 fix: distinguish "key absent" from "key unreadable".
+     Returns { found: false } when the key does not exist,
+     { found: true, value } when it parses, and
+     { found: true, corrupt: true } when JSON.parse throws. */
+  function tryReadRaw(key) {
     try {
       const raw = localStorage.getItem(key);
-      if (raw === null) return fallback;
-      return JSON.parse(raw);
+      if (raw === null) return { found: false };
+      try {
+        return { found: true, value: JSON.parse(raw) };
+      } catch (_) {
+        return { found: true, corrupt: true };
+      }
     } catch (_) {
-      return fallback;
+      return { found: false };
     }
   }
 
@@ -91,44 +99,50 @@
 
     let dataCorrupt = false;
 
-    const rawTasks = tryRead(KEY_TASKS, null);
-    if (Array.isArray(rawTasks)) {
-      state.tasks = rawTasks;
-    } else if (rawTasks !== null) {
+    const rTasks = tryReadRaw(KEY_TASKS);
+    if (!rTasks.found) {
+      /* key absent, use default */
+    } else if (rTasks.corrupt || !Array.isArray(rTasks.value)) {
       dataCorrupt = true;
       tryWrite(KEY_TASKS, []);
+    } else {
+      state.tasks = rTasks.value;
     }
 
-    const rawLinks = tryRead(KEY_LINKS, null);
-    if (Array.isArray(rawLinks)) {
-      state.links = rawLinks;
-    } else if (rawLinks !== null) {
+    const rLinks = tryReadRaw(KEY_LINKS);
+    if (!rLinks.found) {
+      /* key absent */
+    } else if (rLinks.corrupt || !Array.isArray(rLinks.value)) {
       dataCorrupt = true;
       tryWrite(KEY_LINKS, []);
+    } else {
+      state.links = rLinks.value;
     }
 
-    const rawSettings = tryRead(KEY_SETTINGS, null);
-    if (rawSettings && typeof rawSettings === 'object') {
-      state.settings = Object.assign({}, DEFAULT_SETTINGS, rawSettings);
-    } else if (rawSettings !== null) {
+    const rSettings = tryReadRaw(KEY_SETTINGS);
+    if (!rSettings.found) {
+      /* key absent */
+    } else if (rSettings.corrupt || typeof rSettings.value !== 'object' || rSettings.value === null) {
       dataCorrupt = true;
       tryWrite(KEY_SETTINGS, DEFAULT_SETTINGS);
+    } else {
+      state.settings = Object.assign({}, DEFAULT_SETTINGS, rSettings.value);
     }
 
-    const rawTimer = tryRead(KEY_TIMER, null);
-    if (rawTimer && typeof rawTimer === 'object') {
-      const t = Object.assign({}, DEFAULT_TIMER, rawTimer);
-      if (t.status === 'running') {
-        if (t.endsAt !== null && Date.now() >= t.endsAt) {
-          t.status = 'done';
-          t.endsAt = null;
-          t.remainingMs = 0;
-        }
-      }
-      state.timer = t;
-    } else if (rawTimer !== null) {
+    const rTimer = tryReadRaw(KEY_TIMER);
+    if (!rTimer.found) {
+      /* key absent */
+    } else if (rTimer.corrupt || typeof rTimer.value !== 'object' || rTimer.value === null) {
       dataCorrupt = true;
       tryWrite(KEY_TIMER, DEFAULT_TIMER);
+    } else {
+      const t = Object.assign({}, DEFAULT_TIMER, rTimer.value);
+      if (t.status === 'running' && t.endsAt !== null && Date.now() >= t.endsAt) {
+        t.status = 'done';
+        t.endsAt = null;
+        t.remainingMs = 0;
+      }
+      state.timer = t;
     }
 
     if (dataCorrupt) {
@@ -153,23 +167,22 @@
   }
 
   function renderClock() {
-    const now      = new Date();
-    const hour     = now.getHours();
-    const min      = String(now.getMinutes()).padStart(2, '0');
-    const sec      = String(now.getSeconds()).padStart(2, '0');
-    const hourStr  = String(hour).padStart(2, '0');
+    const now     = new Date();
+    const hour    = now.getHours();
+    const min     = String(now.getMinutes()).padStart(2, '0');
+    const sec     = String(now.getSeconds()).padStart(2, '0');
+    const hourStr = String(hour).padStart(2, '0');
 
     const clockEl = document.getElementById('clock');
     clockEl.setAttribute('datetime', now.toISOString());
     clockEl.innerHTML = '';
-    const mainTime = document.createTextNode(`${hourStr}:${min}`);
-    const secSpan  = document.createElement('span');
+    clockEl.appendChild(document.createTextNode(`${hourStr}:${min}`));
+    const secSpan = document.createElement('span');
     secSpan.className = 'seconds';
     secSpan.textContent = sec;
-    clockEl.appendChild(mainTime);
     clockEl.appendChild(secSpan);
 
-    const dateEl = document.getElementById('date');
+    const dateEl  = document.getElementById('date');
     const dateFmt = new Intl.DateTimeFormat('id-ID', {
       weekday: 'long', day: 'numeric', month: 'long', year: 'numeric'
     });
@@ -180,18 +193,17 @@
   }
 
   function renderGreeting(hour) {
-    const name     = state.settings.name.trim();
-    const phrase   = greetPhrase(hour);
-    const greetEl  = document.getElementById('greeting');
-    if (name) {
-      greetEl.textContent = `${phrase}, ${name}.`;
-    } else {
-      greetEl.textContent = `${phrase}.`;
-    }
+    const name    = state.settings.name.trim();
+    const phrase  = greetPhrase(hour);
+    const greetEl = document.getElementById('greeting');
+    greetEl.textContent = name ? `${phrase}, ${name}.` : `${phrase}.`;
   }
 
   /* ── Timer ── */
-  let tickRaf = null;
+  /* Bug #5 fix: use setInterval(1000) instead of requestAnimationFrame.
+     The count is based on endsAt - Date.now(), so accuracy is preserved;
+     we just stop calling renderTimer 60x per second for one digit change. */
+  let tickInterval = null;
 
   function formatMs(ms) {
     const totalSec = Math.max(0, Math.ceil(ms / 1000));
@@ -205,26 +217,22 @@
     if (t.status === 'running' && t.endsAt !== null) {
       return Math.max(0, t.endsAt - Date.now());
     }
-    if (t.status === 'paused') {
-      return t.remainingMs;
-    }
-    if (t.status === 'idle') {
-      return state.settings.durationMs;
-    }
+    if (t.status === 'paused')  return t.remainingMs;
+    if (t.status === 'idle')    return state.settings.durationMs;
     return 0;
   }
 
   function renderTimer() {
-    const t         = state.timer;
-    const digitsEl  = document.getElementById('timer-digits');
-    const statusEl  = document.getElementById('timer-status');
-    const barEl     = document.getElementById('timer-bar');
-    const primaryEl = document.getElementById('btn-timer-primary');
+    const t             = state.timer;
+    const digitsEl      = document.getElementById('timer-digits');
+    const statusEl      = document.getElementById('timer-status');
+    const barEl         = document.getElementById('timer-bar');
+    const primaryEl     = document.getElementById('btn-timer-primary');
     const durationInput = document.getElementById('input-duration');
     const durationHint  = document.getElementById('duration-hint');
-    const totalMs   = state.settings.durationMs;
+    const totalMs       = state.settings.durationMs;
 
-    const remMs = timerRemainingMs();
+    const remMs    = timerRemainingMs();
     digitsEl.textContent = formatMs(remMs);
 
     digitsEl.classList.remove('running', 'done');
@@ -232,74 +240,77 @@
       digitsEl.classList.add(t.status);
     }
 
-    const progress = t.status === 'done' ? 1 : (totalMs > 0 ? (totalMs - remMs) / totalMs : 0);
+    const progress = t.status === 'done'
+      ? 1
+      : (totalMs > 0 ? (totalMs - remMs) / totalMs : 0);
     barEl.style.transform = `scaleX(${Math.min(1, Math.max(0, progress))})`;
 
     if (t.status === 'idle') {
-      statusEl.textContent = 'Siap. Tekan mulai.';
-      primaryEl.textContent = 'Mulai';
+      statusEl.textContent   = 'Siap. Tekan mulai.';
+      primaryEl.textContent  = 'Mulai';
       durationInput.disabled = false;
-      durationHint.hidden = true;
+      durationHint.hidden    = true;
     } else if (t.status === 'running') {
       const endsDate = new Date(t.endsAt);
       const hh = String(endsDate.getHours()).padStart(2, '0');
       const mm = String(endsDate.getMinutes()).padStart(2, '0');
-      statusEl.textContent = `Selesai pukul ${hh}.${mm}.`;
-      primaryEl.textContent = 'Jeda';
+      statusEl.textContent   = `Selesai pukul ${hh}.${mm}.`;
+      primaryEl.textContent  = 'Jeda';
       durationInput.disabled = true;
-      durationHint.hidden = false;
+      durationHint.hidden    = false;
     } else if (t.status === 'paused') {
       const m = Math.floor(remMs / 60000);
       const s = Math.floor((remMs % 60000) / 1000);
-      statusEl.textContent = `Berhenti di ${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}.`;
-      primaryEl.textContent = 'Lanjut';
+      statusEl.textContent   = `Berhenti di ${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}.`;
+      primaryEl.textContent  = 'Lanjut';
       durationInput.disabled = true;
-      durationHint.hidden = false;
+      durationHint.hidden    = false;
     } else if (t.status === 'done') {
-      statusEl.textContent = 'Waktu habis.';
-      primaryEl.textContent = 'Mulai';
+      statusEl.textContent   = 'Waktu habis.';
+      primaryEl.textContent  = 'Mulai';
       durationInput.disabled = false;
-      durationHint.hidden = true;
+      durationHint.hidden    = true;
     }
   }
 
   function timerTick() {
-    const t = state.timer;
-    if (t.status === 'running') {
-      const remMs = t.endsAt - Date.now();
-      if (remMs <= 0) {
-        state.timer.status = 'done';
-        state.timer.endsAt = null;
-        state.timer.remainingMs = 0;
-        persistTimer();
+    if (state.timer.status !== 'running') return;
 
-        const barEl = document.getElementById('timer-bar');
+    const remMs = state.timer.endsAt - Date.now();
+    if (remMs <= 0) {
+      state.timer.status      = 'done';
+      state.timer.endsAt      = null;
+      state.timer.remainingMs = 0;
+      persistTimer();
+      stopTick();
+
+      /* Bug #6 fix: reset bar to 0 first, then animate to 1 so the
+         320ms transition is actually visible. */
+      const barEl = document.getElementById('timer-bar');
+      barEl.classList.remove('completing');
+      barEl.style.transform = 'scaleX(0)';
+
+      requestAnimationFrame(() => {
         barEl.classList.add('completing');
         barEl.style.transform = 'scaleX(1)';
+      });
 
-        const digitsEl = document.getElementById('timer-digits');
-        digitsEl.textContent = '00:00';
-        digitsEl.classList.remove('running');
-        digitsEl.classList.add('done');
-
-        renderTimer();
-        stopTick();
-        return;
-      }
       renderTimer();
-      tickRaf = requestAnimationFrame(timerTick);
+      return;
     }
+
+    renderTimer();
   }
 
   function startTick() {
-    if (tickRaf) cancelAnimationFrame(tickRaf);
-    tickRaf = requestAnimationFrame(timerTick);
+    if (tickInterval) clearInterval(tickInterval);
+    tickInterval = setInterval(timerTick, 1000);
   }
 
   function stopTick() {
-    if (tickRaf) {
-      cancelAnimationFrame(tickRaf);
-      tickRaf = null;
+    if (tickInterval) {
+      clearInterval(tickInterval);
+      tickInterval = null;
     }
   }
 
@@ -321,13 +332,12 @@
   }
 
   function renderTasks() {
-    const list     = document.getElementById('task-list');
-    const empty    = document.getElementById('task-empty');
-    const countEl  = document.getElementById('task-count');
+    const list    = document.getElementById('task-list');
+    const empty   = document.getElementById('task-empty');
+    const countEl = document.getElementById('task-count');
 
-    const tasks  = sortedTasks();
-    const total  = state.tasks.length;
-    const done   = state.tasks.filter(t => t.done).length;
+    const total = state.tasks.length;
+    const done  = state.tasks.filter(t => t.done).length;
 
     countEl.textContent = total > 0 ? `${done} dari ${total} selesai` : '';
 
@@ -339,22 +349,22 @@
     }
     empty.hidden = true;
 
-    tasks.forEach(task => {
+    sortedTasks().forEach(task => {
       const li = document.createElement('li');
-      li.className = 'task-item' + (task.done ? ' done' : '');
+      li.className  = 'task-item' + (task.done ? ' done' : '');
       li.dataset.id = task.id;
 
       const labelEl = document.createElement('label');
       labelEl.htmlFor = `chk-${task.id}`;
 
       const chk = document.createElement('input');
-      chk.type = 'checkbox';
-      chk.id = `chk-${task.id}`;
+      chk.type  = 'checkbox';
+      chk.id    = `chk-${task.id}`;
       chk.checked = task.done;
       chk.setAttribute('aria-label', task.title);
 
       const titleSpan = document.createElement('span');
-      titleSpan.className = 'task-title';
+      titleSpan.className   = 'task-title';
       titleSpan.textContent = task.title;
 
       labelEl.appendChild(chk);
@@ -364,25 +374,23 @@
       actionsDiv.className = 'task-actions';
 
       const editBtn = document.createElement('button');
-      editBtn.type = 'button';
-      editBtn.className = 'btn-text';
-      editBtn.textContent = 'Ubah';
+      editBtn.type          = 'button';
+      editBtn.className     = 'btn-text';
+      editBtn.textContent   = 'Ubah';
       editBtn.dataset.action = 'edit';
-      editBtn.dataset.id = task.id;
+      editBtn.dataset.id    = task.id;
 
       const delBtn = document.createElement('button');
-      delBtn.type = 'button';
-      delBtn.className = 'btn-text';
-      delBtn.textContent = 'Hapus';
+      delBtn.type           = 'button';
+      delBtn.className      = 'btn-text';
+      delBtn.textContent    = 'Hapus';
       delBtn.dataset.action = 'delete';
-      delBtn.dataset.id = task.id;
+      delBtn.dataset.id     = task.id;
 
       actionsDiv.appendChild(editBtn);
       actionsDiv.appendChild(delBtn);
-
       li.appendChild(labelEl);
       li.appendChild(actionsDiv);
-
       list.appendChild(li);
     });
   }
@@ -393,18 +401,16 @@
 
     const dup = state.tasks.some(t => t.title.trim().toLowerCase() === trimmed.toLowerCase());
     if (dup) {
-      const errEl = document.getElementById('task-error');
-      errEl.textContent = 'Tugas ini sudah ada.';
+      document.getElementById('task-error').textContent = 'Tugas ini sudah ada.';
       return;
     }
 
-    const task = {
+    state.tasks.push({
       id: newId(),
       title: trimmed.slice(0, 120),
       done: false,
       createdAt: Date.now(),
-    };
-    state.tasks.push(task);
+    });
     persistAll();
     renderTasks();
 
@@ -435,8 +441,8 @@
     editRow.className = 'task-edit-row';
 
     const inp = document.createElement('input');
-    inp.type = 'text';
-    inp.value = task.title;
+    inp.type      = 'text';
+    inp.value     = task.title;
     inp.maxLength = 120;
     inp.setAttribute('aria-label', 'Edit tugas');
 
@@ -444,12 +450,12 @@
     actionsDiv.className = 'task-edit-actions';
 
     const saveBtn = document.createElement('button');
-    saveBtn.type = 'button';
+    saveBtn.type      = 'button';
     saveBtn.className = 'btn-secondary';
     saveBtn.textContent = 'Simpan';
 
     const cancelBtn = document.createElement('button');
-    cancelBtn.type = 'button';
+    cancelBtn.type      = 'button';
     cancelBtn.className = 'btn-text';
     cancelBtn.textContent = 'Batal';
 
@@ -464,14 +470,10 @@
 
     function doSave() {
       const val = inp.value.trim().replace(/  +/g, ' ');
-      if (!val) {
-        renderTasks();
-        return;
-      }
+      if (!val) { renderTasks(); return; }
       const dup = state.tasks.some(t => t.id !== id && t.title.trim().toLowerCase() === val.toLowerCase());
       if (dup) {
-        const errEl = document.getElementById('task-error');
-        errEl.textContent = 'Tugas ini sudah ada.';
+        document.getElementById('task-error').textContent = 'Tugas ini sudah ada.';
         renderTasks();
         return;
       }
@@ -479,14 +481,14 @@
       persistAll();
       renderTasks();
       document.getElementById('task-error').textContent = '';
-      const editBtn = document.querySelector(`.task-item[data-id="${id}"] [data-action="edit"]`);
-      if (editBtn) editBtn.focus();
+      const btn = document.querySelector(`.task-item[data-id="${id}"] [data-action="edit"]`);
+      if (btn) btn.focus();
     }
 
     function doCancel() {
       renderTasks();
-      const editBtn = document.querySelector(`.task-item[data-id="${id}"] [data-action="edit"]`);
-      if (editBtn) editBtn.focus();
+      const btn = document.querySelector(`.task-item[data-id="${id}"] [data-action="edit"]`);
+      if (btn) btn.focus();
     }
 
     saveBtn.addEventListener('click', doSave);
@@ -498,14 +500,17 @@
   }
 
   function deleteTask(id) {
-    const idx  = state.tasks.findIndex(t => t.id === id);
-    if (idx === -1) return;
-    const removed = state.tasks[idx];
-    state.tasks.splice(idx, 1);
+    /* Bug #8 fix: store the full task object, not the array index.
+       On undo, insert back sorted by createdAt so the visual position
+       is determined by the active sort, not by an index that is only
+       valid for the "created" order. */
+    const removed = state.tasks.find(t => t.id === id);
+    if (!removed) return;
+    state.tasks = state.tasks.filter(t => t.id !== id);
     persistAll();
     renderTasks();
     showToast('Tugas dihapus.', () => {
-      state.tasks.splice(idx, 0, removed);
+      state.tasks.push(removed);
       persistAll();
       renderTasks();
     });
@@ -542,21 +547,21 @@
 
     state.links.forEach(link => {
       const li = document.createElement('li');
-      li.className = 'link-item';
+      li.className  = 'link-item';
       li.dataset.id = link.id;
 
       const a = document.createElement('a');
-      a.href = link.url;
+      a.href   = link.url;
       a.target = '_blank';
-      a.rel = 'noopener noreferrer';
+      a.rel    = 'noopener noreferrer';
       a.textContent = link.label;
 
       const delBtn = document.createElement('button');
-      delBtn.type = 'button';
-      delBtn.className = 'btn-text';
-      delBtn.textContent = 'Hapus';
+      delBtn.type           = 'button';
+      delBtn.className      = 'btn-text';
+      delBtn.textContent    = 'Hapus';
       delBtn.dataset.action = 'delete-link';
-      delBtn.dataset.id = link.id;
+      delBtn.dataset.id     = link.id;
 
       li.appendChild(a);
       li.appendChild(delBtn);
@@ -582,57 +587,57 @@
       return;
     }
 
-    const link = { id: newId(), label: trimLabel, url: normalized };
-    state.links.push(link);
+    state.links.push({ id: newId(), label: trimLabel, url: normalized });
     persistAll();
     renderLinks();
 
     errEl.textContent = '';
     document.getElementById('input-link-label').value = '';
-    document.getElementById('input-link-url').value = '';
+    document.getElementById('input-link-url').value   = '';
     document.getElementById('input-link-label').focus();
   }
 
   function deleteLink(id) {
-    const idx = state.links.findIndex(l => l.id === id);
-    if (idx === -1) return;
-    const removed = state.links[idx];
-    state.links.splice(idx, 1);
+    const removed = state.links.find(l => l.id === id);
+    if (!removed) return;
+    state.links = state.links.filter(l => l.id !== id);
     persistAll();
     renderLinks();
     showToast('Tautan dihapus.', () => {
-      state.links.splice(idx, 0, removed);
+      state.links.push(removed);
       persistAll();
       renderLinks();
     });
   }
 
   /* ── Toast ── */
-  function showToast(msg, undoFn) {
-    if (undoTimer) clearTimeout(undoTimer);
-    undoStack = undoFn;
-
-    const toastEl  = document.getElementById('toast');
-    const msgEl    = document.getElementById('toast-msg');
-    const undoBtn  = document.getElementById('toast-undo');
-
-    msgEl.textContent = msg;
-    toastEl.hidden = false;
-
-    function startUndoTimer() {
-      undoTimer = setTimeout(hideToast, 8000);
-    }
+  /* Bug #4 fix: listeners attached once here, not inside showToast.
+     showToast only updates content and restarts the timer. */
+  function wireToast() {
+    const toastEl = document.getElementById('toast');
+    const undoBtn = document.getElementById('toast-undo');
 
     function stopUndoTimer() {
       if (undoTimer) clearTimeout(undoTimer);
+    }
+    function startUndoTimer() {
+      undoTimer = setTimeout(hideToast, 8000);
     }
 
     toastEl.addEventListener('mouseenter', stopUndoTimer);
     toastEl.addEventListener('mouseleave', startUndoTimer);
     undoBtn.addEventListener('focus', stopUndoTimer);
-    undoBtn.addEventListener('blur', startUndoTimer);
+    undoBtn.addEventListener('blur',  startUndoTimer);
+  }
 
-    startUndoTimer();
+  function showToast(msg, undoFn) {
+    if (undoTimer) clearTimeout(undoTimer);
+    undoStack = undoFn;
+
+    document.getElementById('toast-msg').textContent = msg;
+    document.getElementById('toast').hidden = false;
+
+    undoTimer = setTimeout(hideToast, 8000);
   }
 
   function hideToast() {
@@ -642,13 +647,18 @@
 
   /* ── Event wiring ── */
   function wireEvents() {
-    /* Clock tick */
     setInterval(renderClock, 1000);
 
-    /* Name save */
+    wireToast();
+
+    document.getElementById('toast-undo').addEventListener('click', () => {
+      if (undoStack) undoStack();
+      hideToast();
+    });
+
     document.getElementById('btn-save-name').addEventListener('click', () => {
       const inp = document.getElementById('input-name');
-      let val = inp.value.trim().replace(/  +/g, ' ').slice(0, 24);
+      const val = inp.value.trim().replace(/  +/g, ' ').slice(0, 24);
       state.settings.name = val;
       persistAll();
       renderGreeting(new Date().getHours());
@@ -658,65 +668,41 @@
     });
 
     document.getElementById('input-name').addEventListener('keydown', e => {
-      if (e.key === 'Enter') {
-        e.preventDefault();
-        document.getElementById('btn-save-name').click();
-      }
+      if (e.key === 'Enter') { e.preventDefault(); document.getElementById('btn-save-name').click(); }
     });
 
-    /* Timer primary */
     document.getElementById('btn-timer-primary').addEventListener('click', () => {
       const t = state.timer;
       if (t.status === 'idle' || t.status === 'done') {
-        state.timer = {
-          status: 'running',
-          endsAt: Date.now() + state.settings.durationMs,
-          remainingMs: 0,
-        };
+        state.timer = { status: 'running', endsAt: Date.now() + state.settings.durationMs, remainingMs: 0 };
         persistTimer();
         renderTimer();
         startTick();
       } else if (t.status === 'running') {
-        const remMs = t.endsAt - Date.now();
-        state.timer = {
-          status: 'paused',
-          endsAt: null,
-          remainingMs: Math.max(0, remMs),
-        };
+        state.timer = { status: 'paused', endsAt: null, remainingMs: Math.max(0, t.endsAt - Date.now()) };
         persistTimer();
         stopTick();
         renderTimer();
       } else if (t.status === 'paused') {
-        state.timer = {
-          status: 'running',
-          endsAt: Date.now() + state.timer.remainingMs,
-          remainingMs: 0,
-        };
+        state.timer = { status: 'running', endsAt: Date.now() + t.remainingMs, remainingMs: 0 };
         persistTimer();
         renderTimer();
         startTick();
       }
     });
 
-    /* Timer reset */
     document.getElementById('btn-timer-reset').addEventListener('click', () => {
       stopTick();
-      const barEl = document.getElementById('timer-bar');
-      barEl.classList.remove('completing');
-      state.timer = {
-        status: 'idle',
-        endsAt: null,
-        remainingMs: 0,
-      };
+      document.getElementById('timer-bar').classList.remove('completing');
+      state.timer = { status: 'idle', endsAt: null, remainingMs: 0 };
       persistTimer();
       renderTimer();
     });
 
-    /* Duration change */
     document.getElementById('input-duration').addEventListener('change', e => {
       if (state.timer.status !== 'idle' && state.timer.status !== 'done') return;
       let val = parseInt(e.target.value, 10);
-      if (isNaN(val) || val < 1)   val = 1;
+      if (isNaN(val) || val < 1) val = 1;
       if (val > 120) val = 120;
       e.target.value = val;
       state.settings.durationMs = val * 60 * 1000;
@@ -725,47 +711,34 @@
       renderTimer();
     });
 
-    /* Task list delegation */
     document.getElementById('task-list').addEventListener('click', e => {
       const editBtn = e.target.closest('[data-action="edit"]');
       const delBtn  = e.target.closest('[data-action="delete"]');
       const chk     = e.target.closest('input[type="checkbox"]');
-
-      if (editBtn) {
-        startEditTask(editBtn.dataset.id);
-      } else if (delBtn) {
-        deleteTask(delBtn.dataset.id);
-      } else if (chk) {
-        toggleTask(chk.closest('.task-item').dataset.id);
-      }
+      if (editBtn)     startEditTask(editBtn.dataset.id);
+      else if (delBtn) deleteTask(delBtn.dataset.id);
+      else if (chk)    toggleTask(chk.closest('.task-item').dataset.id);
     });
 
-    /* Add task */
     document.getElementById('btn-add-task').addEventListener('click', () => {
       addTask(document.getElementById('input-task').value);
     });
 
     document.getElementById('input-task').addEventListener('keydown', e => {
-      if (e.key === 'Enter') {
-        e.preventDefault();
-        addTask(document.getElementById('input-task').value);
-      }
+      if (e.key === 'Enter') { e.preventDefault(); addTask(document.getElementById('input-task').value); }
     });
 
-    /* Sort */
     document.getElementById('select-sort').addEventListener('change', e => {
       state.settings.sort = e.target.value;
       persistAll();
       renderTasks();
     });
 
-    /* Link list delegation */
     document.getElementById('link-list').addEventListener('click', e => {
       const delBtn = e.target.closest('[data-action="delete-link"]');
       if (delBtn) deleteLink(delBtn.dataset.id);
     });
 
-    /* Add link */
     document.getElementById('btn-add-link').addEventListener('click', () => {
       addLink(
         document.getElementById('input-link-label').value,
@@ -774,24 +747,13 @@
     });
 
     document.getElementById('input-link-url').addEventListener('keydown', e => {
-      if (e.key === 'Enter') {
-        e.preventDefault();
-        document.getElementById('btn-add-link').click();
-      }
+      if (e.key === 'Enter') { e.preventDefault(); document.getElementById('btn-add-link').click(); }
     });
 
-    /* Toast undo */
-    document.getElementById('toast-undo').addEventListener('click', () => {
-      if (undoStack) undoStack();
-      hideToast();
-    });
-
-    /* Storage banner close */
     document.getElementById('storage-banner-close').addEventListener('click', () => {
       document.getElementById('storage-banner').hidden = true;
     });
 
-    /* Cross-tab sync */
     window.addEventListener('storage', e => {
       if (!e.key || !e.key.startsWith('lifedash.')) return;
       loadState();
@@ -806,18 +768,11 @@
     renderTasks();
     renderLinks();
 
-    const nameInp = document.getElementById('input-name');
-    nameInp.value = state.settings.name;
+    document.getElementById('input-name').value  = state.settings.name;
+    document.getElementById('select-sort').value = state.settings.sort;
+    document.getElementById('input-duration').value = Math.round(state.settings.durationMs / 60000);
 
-    const sortSel = document.getElementById('select-sort');
-    sortSel.value = state.settings.sort;
-
-    const durInp = document.getElementById('input-duration');
-    durInp.value = Math.round(state.settings.durationMs / 60000);
-
-    if (state.timer.status === 'running') {
-      startTick();
-    }
+    if (state.timer.status === 'running') startTick();
   }
 
   loadState();
