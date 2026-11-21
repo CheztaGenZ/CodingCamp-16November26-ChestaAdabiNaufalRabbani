@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Life Dashboard</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="css/style.css">
+  <script defer src="js/app.js"></script>
+</head>
+<body>
+  <div id="storage-banner" class="storage-banner" hidden>
+    <span id="storage-banner-msg"></span>
+    <button type="button" id="storage-banner-close">Tutup</button>
+  </div>
+
+  <div class="page-wrap">
+    <header aria-label="Waktu dan sapaan">
+      <div class="now-block">
+        <div class="clock-row">
+          <time id="clock" datetime=""></time>
+        </div>
+        <div class="date-row">
+          <time id="date" datetime=""></time>
+        </div>
+        <h1 id="greeting" class="greeting"></h1>
+        <div class="name-row">
+          <label for="input-name" class="label-name">Nama panggilan</label>
+          <div class="name-controls">
+            <input type="text" id="input-name" maxlength="24" autocomplete="off" spellcheck="false" placeholder="Nama kamu">
+            <button type="button" id="btn-save-name" class="btn-secondary">Simpan</button>
+          </div>
+          <span id="name-saved-msg" class="meta-msg" role="status" aria-live="polite"></span>
+        </div>
+      </div>
+    </header>
+
+    <main>
+      <div class="main-grid">
+        <div class="col-left">
+          <section class="section-tasks" aria-labelledby="label-tasks">
+            <div class="section-header">
+              <h2 id="label-tasks" class="section-label"><span class="label-dot" aria-hidden="true"></span>Hari ini</h2>
+              <div class="tasks-meta-row">
+                <span id="task-count" class="meta-count" role="status" aria-live="polite"></span>
+                <label for="select-sort" class="sr-only">Urutkan</label>
+                <select id="select-sort" class="select-sort">
+                  <option value="created">Dibuat</option>
+                  <option value="alpha">A-Z</option>
+                  <option value="open">Belum selesai dulu</option>
+                </select>
+              </div>
+            </div>
+            <div class="task-add-row">
+              <label for="input-task" class="sr-only">Tugas baru</label>
+              <input type="text" id="input-task" maxlength="120" autocomplete="off" spellcheck="false" placeholder="Satu hal untuk hari ini">
+              <button type="button" id="btn-add-task" class="btn-secondary">Tambah</button>
+            </div>
+            <span id="task-error" class="field-error" role="status" aria-live="polite"></span>
+            <ul id="task-list" class="task-list" aria-label="Daftar tugas"></ul>
+            <div id="task-empty" class="empty-state" hidden>
+              <p>Belum ada tugas.</p>
+              <p class="meta-hint">Satu baris cukup. Bisa diubah nanti.</p>
+            </div>
+          </section>
+        </div>
+
+        <div class="col-right">
+          <section class="section-timer" aria-labelledby="label-timer">
+            <div class="section-header">
+              <h2 id="label-timer" class="section-label"><span class="label-dot" aria-hidden="true"></span>Fokus</h2>
+            </div>
+            <div class="timer-display">
+              <div id="timer-digits" class="timer-digits">25:00</div>
+              <div class="timer-track" aria-hidden="true">
+                <div id="timer-bar" class="timer-bar"></div>
+              </div>
+              <p id="timer-status" class="timer-status" role="status" aria-live="polite">Siap. Tekan mulai.</p>
+            </div>
+            <div class="timer-controls">
+              <button type="button" id="btn-timer-primary" class="btn-primary">Mulai</button>
+              <button type="button" id="btn-timer-reset" class="btn-secondary">Reset</button>
+            </div>
+            <div class="timer-duration-row">
+              <label for="input-duration" class="duration-label">Durasi (menit)</label>
+              <input type="number" id="input-duration" class="input-duration" min="1" max="120" value="25">
+              <span id="duration-hint" class="duration-hint" hidden>Reset dulu untuk mengubah durasi.</span>
+            </div>
+          </section>
+
+          <div class="section-divider" aria-hidden="true"></div>
+
+          <section class="section-links" aria-labelledby="label-links">
+            <div class="section-header">
+              <h2 id="label-links" class="section-label"><span class="label-dot" aria-hidden="true"></span>Tautan</h2>
+            </div>
+            <div class="link-add-block">
+              <div class="link-field">
+                <label for="input-link-label" class="field-label">Nama</label>
+                <input type="text" id="input-link-label" maxlength="24" autocomplete="off" spellcheck="false" placeholder="Nama situs">
+              </div>
+              <div class="link-field">
+                <label for="input-link-url" class="field-label">Alamat</label>
+                <input type="text" id="input-link-url" autocomplete="off" spellcheck="false" placeholder="https://...">
+              </div>
+              <span id="link-error" class="field-error" role="status" aria-live="polite"></span>
+              <button type="button" id="btn-add-link" class="btn-secondary">Simpan</button>
+            </div>
+            <ul id="link-list" class="link-list" aria-label="Daftar tautan"></ul>
+            <div id="link-empty" class="empty-state" hidden>
+              <p>Belum ada tautan.</p>
+              <p class="meta-hint">Simpan situs yang paling sering kamu buka.</p>
+            </div>
+          </section>
+        </div>
+      </div>
+    </main>
+
+    <footer>
+      <p class="footer-note">Data tersimpan di browser ini, tidak dikirim ke mana pun.</p>
+    </footer>
+  </div>
+
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden>
+    <span id="toast-msg"></span>
+    <button type="button" id="toast-undo" class="btn-undo">Urungkan</button>
+  </div>
+</body>
+</html>
